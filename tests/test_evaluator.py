@@ -266,6 +266,181 @@ class EvaluatorTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "positive integer"):
                     Evaluator(max_loop_iterations=invalid_limit)
 
+    def test_dispatch_evaluates_every_expression_class(self):
+        self.evaluator.globals.define("seed", 4)
+        cases = (
+            (ast.NumberLiteral(2), 2),
+            (ast.NumberLiteral(2.5), 2.5),
+            (ast.StringLiteral("text"), "text"),
+            (ast.BooleanLiteral(True), True),
+            (ast.Variable("seed"), 4),
+            (ast.Grouping(ast.NumberLiteral(3)), 3),
+            (ast.Unary("-", ast.NumberLiteral(2)), -2),
+            (ast.Unary("!", ast.BooleanLiteral(True)), False),
+            (ast.Binary(ast.NumberLiteral(2), "+", ast.NumberLiteral(3)), 5),
+        )
+        for expression, expected in cases:
+            with self.subTest(expression=expression):
+                actual = self.evaluator.evaluate(expression)
+                self.assertEqual(expected, actual)
+                self.assertIs(type(expected), type(actual))
+
+    def test_dispatch_executes_every_statement_class(self):
+        statements = [
+            ast.LetStatement("x", ast.NumberLiteral(1)),
+            ast.Assignment("x", ast.NumberLiteral(2)),
+            ast.PrintStatement(ast.Variable("x")),
+            ast.Block([ast.LetStatement("x", ast.NumberLiteral(99)),
+                       ast.PrintStatement(ast.Variable("x"))]),
+            ast.IfStatement(ast.BooleanLiteral(False),
+                            ast.Block([ast.PrintStatement(ast.Variable("missing"))]),
+                            ast.Block([ast.PrintStatement(ast.StringLiteral("else"))])),
+            ast.WhileStatement(
+                ast.Binary(ast.Variable("x"), "<", ast.NumberLiteral(4)),
+                ast.Block([ast.PrintStatement(ast.Variable("x")),
+                           ast.Assignment("x", ast.Binary(ast.Variable("x"), "+", ast.NumberLiteral(1)))])),
+            ast.RuleStatement("ready", ast.BooleanLiteral(True),
+                              ast.Block([ast.PrintStatement(ast.StringLiteral("rule"))])),
+        ]
+        self.evaluator.execute(statements)
+        self.assertEqual(["2", "99", "else", "2", "3", "rule"], self.output)
+        self.assertEqual({"x": 4}, self.evaluator.globals.values)
+        self.assertIs(self.evaluator.globals, self.evaluator.environment)
+
+    def test_unsupported_nodes_preserve_message_and_location(self):
+        expression = ast.Expr(line=4, column=7)
+        statement = ast.Stmt(line=6, column=9)
+        with self.assertRaisesRegex(EvaluationError, "Unsupported expression node: Expr\\.") as caught:
+            self.evaluator.evaluate(expression)
+        self.assertEqual((4, 7), (caught.exception.line, caught.exception.column))
+        with self.assertRaisesRegex(EvaluationError, "Unsupported statement node: Stmt\\.") as caught:
+            self.evaluator.execute_statement(statement)
+        self.assertEqual((6, 9), (caught.exception.line, caught.exception.column))
+
+    def test_dispatch_rejects_unregistered_subclasses(self):
+        class DerivedNumber(ast.NumberLiteral):
+            """An embedding-specific node without a registered handler."""
+
+        class DerivedPrint(ast.PrintStatement):
+            """An embedding-specific statement without a registered handler."""
+
+        expression = DerivedNumber(1, line=2, column=3)
+        statement = DerivedPrint(ast.NumberLiteral(1), line=5, column=8)
+        with self.assertRaisesRegex(EvaluationError, "Unsupported expression node: DerivedNumber\\.") as caught:
+            self.evaluator.evaluate(expression)
+        self.assertEqual((2, 3), (caught.exception.line, caught.exception.column))
+        with self.assertRaisesRegex(EvaluationError, "Unsupported statement node: DerivedPrint\\.") as caught:
+            self.evaluator.execute_statement(statement)
+        self.assertEqual((5, 8), (caught.exception.line, caught.exception.column))
+
+    def test_numeric_left_type_checked_before_undefined_right(self):
+        for operator in ("+", "-", "*", "/", ">", ">=", "<", "<="):
+            with self.subTest(operator=operator):
+                statements = program(f"print(true {operator} missing);")
+                with self.assertRaisesRegex(EvaluationError, "requires numeric operands") as caught:
+                    self.evaluator.execute(statements)
+                self.assertEqual((1, 12), (caught.exception.line, caught.exception.column))
+
+    def test_operand_resolution_remains_left_to_right(self):
+        for source, message in (
+            ("print(left + right);", "Undefined variable 'left'"),
+            ("print(missing + true);", "Undefined variable 'missing'"),
+            ("print(1 + missing);", "Undefined variable 'missing'"),
+            ('print("text" == missing);', "Undefined variable 'missing'"),
+            ("print(true != missing);", "Undefined variable 'missing'"),
+            ("print(1 + false);", "requires numeric operands"),
+        ):
+            with self.subTest(source=source):
+                statements = program(source)
+                with self.assertRaisesRegex(EvaluationError, message):
+                    self.evaluator.execute(statements)
+
+    def test_unknown_operator_still_resolves_right_before_type_check(self):
+        expression = ast.Binary(ast.BooleanLiteral(True), "%", ast.Variable("missing", line=3, column=5))
+        with self.assertRaisesRegex(EvaluationError, "Undefined variable 'missing'") as caught:
+            self.evaluator.evaluate(expression)
+        self.assertEqual((3, 5), (caught.exception.line, caught.exception.column))
+
+    def test_nonfinite_results_from_every_arithmetic_operator(self):
+        for left, operator, right in ((1e308, "+", 1e308), (-1e308, "-", 1e308),
+                                      (1e308, "*", 2), (1e308, "/", 1e-308)):
+            with self.subTest(operator=operator):
+                expression = ast.Binary(ast.NumberLiteral(left), operator, ast.NumberLiteral(right),
+                                        line=4, column=7)
+                with self.assertRaisesRegex(EvaluationError, "Numeric result is not finite\\.") as caught:
+                    self.evaluator.evaluate(expression)
+                self.assertEqual((4, 7), (caught.exception.line, caught.exception.column))
+
+    def test_arithmetic_overflow_preserves_operator_location(self):
+        for operator in ("+", "-", "*", "/"):
+            with self.subTest(operator=operator):
+                expression = ast.Binary(ast.NumberLiteral(10 ** 400), operator, ast.NumberLiteral(0.5),
+                                        line=5, column=8)
+                with self.assertRaisesRegex(EvaluationError, "Numeric operation overflowed\\.") as caught:
+                    self.evaluator.evaluate(expression)
+                self.assertEqual((5, 8), (caught.exception.line, caught.exception.column))
+
+    def test_external_nonfinite_values_cannot_bypass_validation(self):
+        for value in (float("inf"), float("-inf"), float("nan")):
+            for source in ("print(value);", "print((value));", "print(-value);", "print(value + 1);",
+                           "print(value == value);", "print(value < 1);", "if (value) {}"):
+                with self.subTest(value=value, source=source):
+                    environment = Environment()
+                    environment.define("value", value)
+                    evaluator = Evaluator(environment, output=self.output.append)
+                    statements = program(source)
+                    with self.assertRaisesRegex(EvaluationError, "Numeric result is not finite\\.") as caught:
+                        evaluator.execute(statements)
+                    self.assertEqual((1, source.index("value") + 1),
+                                     (caught.exception.line, caught.exception.column))
+        self.assertEqual([], self.output)
+
+    def test_manual_nonfinite_literal_is_rejected(self):
+        for value in (float("inf"), float("-inf"), float("nan")):
+            with self.subTest(value=value):
+                expression = ast.NumberLiteral(value, line=2, column=4)
+                with self.assertRaisesRegex(EvaluationError, "not finite") as caught:
+                    self.evaluator.evaluate(expression)
+                self.assertEqual((2, 4), (caught.exception.line, caught.exception.column))
+
+    def test_short_circuit_skips_external_nonfinite_values(self):
+        self.evaluator.globals.define("value", float("inf"))
+        self.assertEqual(["false", "true"], self.run_source("print(false && value); print(true || value);"))
+
+    def test_numeric_comparisons_return_booleans(self):
+        for operator, expected in ((">", True), (">=", True), ("<", False), ("<=", False)):
+            with self.subTest(operator=operator):
+                expression = ast.Binary(ast.NumberLiteral(2), operator, ast.NumberLiteral(1.5))
+                self.assertIs(expected, self.evaluator.evaluate(expression))
+
+    def test_else_if_selects_only_the_first_matching_branch(self):
+        for source, expected in (
+            ('if (true) { print("first"); } else if (missing) { print("unexpected"); }', ["first"]),
+            ('if (false) {} else if (true) { print("second"); } else { print(missing); }', ["second"]),
+            ('if (false) {} else if (false) {} else if (true) { print("third"); }', ["third"]),
+            ('if (false) {} else if (false) {} else { print("last"); }', ["last"]),
+            ('if (false) {} else if (false) { print(missing); }', []),
+        ):
+            with self.subTest(source=source):
+                output = []
+                Evaluator(output=output.append).execute(program(source))
+                self.assertEqual(expected, output)
+
+    def test_nested_else_if_preserves_shadowing_and_scopes(self):
+        self.assertEqual(["3", "3", "1"], self.run_source(
+            "let x = 1; if (false) {} else if (x == 1) { let x = 2;"
+            "if (false) {} else if (x == 2) { x = 3; print(x); } print(x); } print(x);"
+        ))
+        self.assertEqual({"x": 1}, self.evaluator.globals.values)
+        self.assertIs(self.evaluator.globals, self.evaluator.environment)
+
+    def test_else_if_conditions_are_strict_and_keep_locations(self):
+        statements = program("if (false) {}\nelse if (1) {}")
+        with self.assertRaisesRegex(EvaluationError, "if condition requires a boolean") as caught:
+            self.evaluator.execute(statements)
+        self.assertEqual((2, 6), (caught.exception.line, caught.exception.column))
+        self.assertEqual([], self.run_source("if (true) {} else if (1) { print(missing); }"))
+
 
 if __name__ == "__main__":
     unittest.main()

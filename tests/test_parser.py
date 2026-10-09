@@ -140,6 +140,46 @@ class ParserTests(unittest.TestCase):
                 with self.assertRaises(ParseError):
                     Parser(tokens)
 
+    def test_else_if_chain_reuses_if_nodes_and_locations(self):
+        statement = self.assert_node(parse(
+            "if (false) {}\n  else if (false) {} else if (true) {} else {}"
+        )[0], ast.IfStatement)
+        second = self.assert_node(statement.else_branch, ast.IfStatement)
+        third = self.assert_node(second.else_branch, ast.IfStatement)
+        self.assertIsInstance(third.else_branch, ast.Block)
+        self.assertEqual((1, 1), (statement.line, statement.column))
+        self.assertEqual((2, 8), (second.line, second.column))
+        self.assertEqual((2, 27), (third.line, third.column))
+
+    def test_else_if_inside_block_keeps_outer_else(self):
+        statement = self.assert_node(parse(
+            "if (true) { if (false) {} else if (true) {} } else {}"
+        )[0], ast.IfStatement)
+        inner = self.assert_node(statement.then_branch.statements[0], ast.IfStatement)
+        self.assertIsInstance(inner.else_branch, ast.IfStatement)
+        self.assertIsInstance(statement.else_branch, ast.Block)
+
+    def test_malformed_else_if_requires_conditions_and_braces(self):
+        sources = (
+            "if (false) {} else if true {}",
+            "if (false) {} else if () {}",
+            "if (false) {} else if (true {}",
+            "if (false) {} else if (true) print(1);",
+            "if (false) {} else if (true) {",
+            "if (false) {} else if (true &&) {}",
+            "if (false) {} else if (false) {} else print(1);",
+            "if (false) {} else print(1);",
+            "if (false) {} else while (true) {}",
+            "if (false) {} else { } else if (true) {}",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                parser = Parser(Lexer(source).tokenize())
+                with self.assertRaises(ParseError) as caught:
+                    parser.parse()
+                self.assertIsNotNone(caught.exception.line)
+                self.assertIsNotNone(caught.exception.column)
+
 
 if __name__ == "__main__":
     unittest.main()

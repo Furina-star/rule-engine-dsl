@@ -83,7 +83,7 @@ class Block(Stmt):
 class IfStatement(Stmt):
     condition: Expr
     then_branch: Block
-    else_branch: Block | None = None
+    else_branch: Block | IfStatement | None = None
 
 
 @dataclass
@@ -97,4 +97,3 @@ class RuleStatement(Stmt):
     name: str
     condition: Expr
     action: Block
-

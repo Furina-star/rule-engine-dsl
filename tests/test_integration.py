@@ -127,6 +127,36 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn("--max-loop-iterations", result.stdout)
         self.assertEqual("", result.stderr)
 
+    def test_source_caret_for_lexer_parser_and_runtime_errors(self):
+        for source, message, column, expected_output in (
+            ("\n  @", "Lexer error at line 2, column 3", 3, ""),
+            ("\n  print();", "Syntax error at line 2, column 9", 9, ""),
+            ('print("before");\n  print(1 / 0);', "Runtime error at line 2, column 11", 11, "before\n"),
+        ):
+            with self.subTest(source=source):
+                result = self.temporary_program(source, "--show-source")
+                self.assert_failure(result, message)
+                self.assertIn("test.rule:", result.stderr)
+                self.assertEqual(expected_output, result.stdout)
+                self.assertEqual(["    " + source.split("\n")[1], "    " + " " * (column - 1) + "^"],
+                                 result.stderr.splitlines()[1:])
+
+    def test_source_caret_handles_blank_eof_line(self):
+        result = self.temporary_program("{\n", "--show-source")
+        self.assert_failure(result, "Syntax error at line 2, column 1")
+        self.assertEqual(["    ", "    ^"], result.stderr.splitlines()[1:])
+
+    def test_error_excerpt_is_disabled_by_default(self):
+        result = self.temporary_program("\n  @")
+        self.assert_failure(result, "Lexer error at line 2, column 3")
+        self.assertEqual(1, len(result.stderr.splitlines()))
+
+    def test_else_if_program_via_cli(self):
+        self.assert_success(self.temporary_program(
+            'let score = 85; if (score >= 90) { print("excellent"); }'
+            'else if (score >= 75) { print("passed"); } else { print("retry"); }'
+        ), "passed\n")
+
 
 if __name__ == "__main__":
     unittest.main()

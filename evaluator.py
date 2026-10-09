@@ -5,7 +5,7 @@ from math import isfinite
 import operator as numeric_ops
 from typing import cast
 
-import ast_nodes as ast
+import ast_nodes as nodes
 from environment import Environment, Value
 from errors import EvaluationError
 
@@ -22,6 +22,8 @@ _NUMERIC_OPERATORS = {
 
 
 class Evaluator:
+    """Recursively walk AST nodes in lexical scopes, checking rules immediately."""
+
     def __init__(self, environment: Environment | None = None,
                  output: Callable[[str], None] = print,
                  max_loop_iterations: int = DEFAULT_LOOP_LIMIT) -> None:
@@ -31,13 +33,32 @@ class Evaluator:
         self.environment = self.globals
         self.output = output
         self.max_loop_iterations = max_loop_iterations
+        self._statement_handlers: dict[type[nodes.Stmt], Callable[..., None]] = {
+            nodes.LetStatement: self._execute_let,
+            nodes.Assignment: self._execute_assignment,
+            nodes.PrintStatement: self._execute_print,
+            nodes.Block: self._execute_block,
+            nodes.IfStatement: self._execute_if,
+            nodes.WhileStatement: self._execute_while,
+            nodes.RuleStatement: self._execute_rule,
+        }
+        self._expression_handlers: dict[type[nodes.Expr], Callable[..., Value]] = {
+            nodes.NumberLiteral: self._evaluate_literal,
+            nodes.StringLiteral: self._evaluate_literal,
+            nodes.BooleanLiteral: self._evaluate_literal,
+            nodes.Variable: self._evaluate_variable,
+            nodes.Grouping: self._evaluate_grouping,
+            nodes.Unary: self._evaluate_unary,
+            nodes.Binary: self._binary,
+        }
 
-    def execute(self, statements: Iterable[ast.Stmt]) -> None:
+    def execute(self, statements: Iterable[nodes.Stmt]) -> None:
         """Execute in order, retaining globals even across calls to execute()."""
         for statement in statements:
             self.execute_statement(statement)
 
-    def execute_statement(self, statement: ast.Stmt) -> None:
+    def execute_statement(self, statement: nodes.Stmt) -> None:
+        """Execute one statement, attaching its location to unlocated errors."""
         try:
             self._execute_statement(statement)
         except EvaluationError as error:
@@ -45,26 +66,23 @@ class Evaluator:
                 raise EvaluationError(error.message, statement.line, statement.column) from error
             raise
 
-    def _execute_statement(self, statement: ast.Stmt) -> None:
-        if isinstance(statement, ast.LetStatement):
-            self.environment.define(statement.name, self.evaluate(statement.initializer))
-        elif isinstance(statement, ast.Assignment):
-            self.environment.assign(statement.name, self.evaluate(statement.value))
-        elif isinstance(statement, ast.PrintStatement):
-            self._execute_print(statement)
-        elif isinstance(statement, ast.Block):
-            self._execute_block(statement)
-        elif isinstance(statement, ast.IfStatement):
-            self._execute_if(statement)
-        elif isinstance(statement, ast.WhileStatement):
-            self._execute_while(statement)
-        elif isinstance(statement, ast.RuleStatement):
-            if self._condition(statement.condition, f"rule '{statement.name}' condition"):
-                self.execute_statement(statement.action)
-        else:
+    def _execute_statement(self, statement: nodes.Stmt) -> None:
+        handler = self._statement_handlers.get(type(statement))
+        if handler is None:
             raise EvaluationError(f"Unsupported statement node: {type(statement).__name__}.")
+        handler(statement)
 
-    def _execute_print(self, statement: ast.PrintStatement) -> None:
+    def _execute_let(self, statement: nodes.LetStatement) -> None:
+        self.environment.define(statement.name, self.evaluate(statement.initializer))
+
+    def _execute_assignment(self, statement: nodes.Assignment) -> None:
+        self.environment.assign(statement.name, self.evaluate(statement.value))
+
+    def _execute_rule(self, statement: nodes.RuleStatement) -> None:
+        if self._condition(statement.condition, f"rule '{statement.name}' condition"):
+            self.execute_statement(statement.action)
+
+    def _execute_print(self, statement: nodes.PrintStatement) -> None:
         value = self.evaluate(statement.expression)
         try:
             rendered = str(value).lower() if type(value) is bool else str(value)
@@ -72,7 +90,7 @@ class Evaluator:
             raise EvaluationError("Number is too large to print on this Python runtime.") from error
         self.output(rendered)
 
-    def _execute_block(self, statement: ast.Block) -> None:
+    def _execute_block(self, statement: nodes.Block) -> None:
         enclosing = self.environment
         self.environment = Environment(parent=enclosing)
         try:
@@ -81,13 +99,13 @@ class Evaluator:
             # Restore the parent even when a nested statement fails.
             self.environment = enclosing
 
-    def _execute_if(self, statement: ast.IfStatement) -> None:
+    def _execute_if(self, statement: nodes.IfStatement) -> None:
         if self._condition(statement.condition, "if condition"):
             self.execute_statement(statement.then_branch)
         elif statement.else_branch is not None:
             self.execute_statement(statement.else_branch)
 
-    def _execute_while(self, statement: ast.WhileStatement) -> None:
+    def _execute_while(self, statement: nodes.WhileStatement) -> None:
         iterations = 0
         # The body restores the enclosing scope before this next check.
         while self._condition(statement.condition, "while condition"):
@@ -98,7 +116,7 @@ class Evaluator:
             iterations += 1
             self.execute_statement(statement.body)
 
-    def _condition(self, expression: ast.Expr, context: str) -> bool:
+    def _condition(self, expression: nodes.Expr, context: str) -> bool:
         return self._boolean(self.evaluate(expression), context)
 
     @staticmethod
@@ -115,12 +133,11 @@ class Evaluator:
                                   f"got {type(value).__name__}.")
         return cast(int | float, value)
 
-    def evaluate(self, expression: ast.Expr) -> Value:
+    def evaluate(self, expression: nodes.Expr) -> Value:
+        """Evaluate an expression safely and report failures at their AST location."""
         try:
-            result = self._evaluate(expression)
-            if isinstance(result, float) and not isfinite(result):
-                raise EvaluationError("Numeric result is not finite.")
-            return result
+            # Also check literals and variables supplied by embedded callers.
+            return self._finite(self._evaluate(expression))
         except EvaluationError as error:
             if error.line is None:
                 raise EvaluationError(error.message, expression.line, expression.column) from error
@@ -129,37 +146,54 @@ class Evaluator:
             raise EvaluationError("Numeric operation overflowed.",
                                   expression.line, expression.column) from error
 
-    def _evaluate(self, expression: ast.Expr) -> Value:
-        if isinstance(expression, (ast.NumberLiteral, ast.StringLiteral, ast.BooleanLiteral)):
-            return expression.value
-        if isinstance(expression, ast.Variable):
-            return self.environment.get(expression.name)
-        if isinstance(expression, ast.Grouping):
-            return self.evaluate(expression.expression)
-        if isinstance(expression, ast.Unary):
-            value = self.evaluate(expression.operand)
-            if expression.operator == "!":
-                return not self._boolean(value, "Operator '!'")
-            if expression.operator == "-":
-                return -self._number(value, "-")
-            raise EvaluationError(f"Unknown unary operator '{expression.operator}'.")
-        if isinstance(expression, ast.Binary):
-            return self._binary(expression)
-        raise EvaluationError(f"Unsupported expression node: {type(expression).__name__}.")
+    def _evaluate(self, expression: nodes.Expr) -> Value:
+        handler = self._expression_handlers.get(type(expression))
+        if handler is None:
+            raise EvaluationError(f"Unsupported expression node: {type(expression).__name__}.")
+        return handler(expression)
 
-    def _binary(self, expression: ast.Binary) -> Value:
+    @staticmethod
+    def _evaluate_literal(expression: nodes.NumberLiteral | nodes.StringLiteral | nodes.BooleanLiteral) -> Value:
+        return expression.value
+
+    def _evaluate_variable(self, expression: nodes.Variable) -> Value:
+        return self.environment.get(expression.name)
+
+    def _evaluate_grouping(self, expression: nodes.Grouping) -> Value:
+        return self.evaluate(expression.expression)
+
+    def _evaluate_unary(self, expression: nodes.Unary) -> Value:
+        value = self.evaluate(expression.operand)
+        if expression.operator == "!":
+            return not self._boolean(value, "Operator '!'")
+        if expression.operator == "-":
+            return -self._number(value, "-")
+        raise EvaluationError(f"Unknown unary operator '{expression.operator}'.")
+
+    @staticmethod
+    def _finite(value: Value) -> Value:
+        if isinstance(value, float) and not isfinite(value):
+            raise EvaluationError("Numeric result is not finite.")
+        return value
+
+    def _binary(self, expression: nodes.Binary) -> Value:
         operator = expression.operator
         left = self.evaluate(expression.left)
         if operator in ("&&", "||"):
             return self._logical(expression, left)
 
+        if operator in _NUMERIC_OPERATORS or operator == "/":
+            first = self._number(left, operator)
+            return self._numeric_binary(first, self.evaluate(expression.right), operator)
+
         right = self.evaluate(expression.right)
         if operator in ("==", "!="):
             return self._equality(left, right, operator)
 
-        return self._numeric_binary(left, right, operator)
+        # Unknown operators retain their existing evaluation and validation order.
+        return self._numeric_binary(self._number(left, operator), right, operator)
 
-    def _logical(self, expression: ast.Binary, left: Value) -> bool:
+    def _logical(self, expression: nodes.Binary, left: Value) -> bool:
         operator = expression.operator
         boolean = self._boolean(left, f"Operator '{operator}'")
         if operator == "&&" and not boolean:
@@ -174,14 +208,13 @@ class Evaluator:
         equal = (both_numbers or type(left) is type(right)) and left == right
         return equal if operator == "==" else not equal
 
-    def _numeric_binary(self, left: Value, right: Value, operator: str) -> Value:
-        first = self._number(left, operator)
+    def _numeric_binary(self, first: int | float, right: Value, operator: str) -> Value:
         second = self._number(right, operator)
         if operator == "/":
             if second == 0:
                 raise EvaluationError("Division by zero.")
-            return first / second
+            return self._finite(first / second)
         operation = _NUMERIC_OPERATORS.get(operator)
         if operation is None:
             raise EvaluationError(f"Unknown binary operator '{operator}'.")
-        return operation(first, second)
+        return self._finite(operation(first, second))

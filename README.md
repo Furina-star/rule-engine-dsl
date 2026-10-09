@@ -40,14 +40,15 @@ python main.py examples/loop_demo.rule
 
 With no file argument, the interpreter finds the bundled sample relative to `main.py`, even when launched from another directory. An explicit relative path is resolved from the terminal's current directory. Input is UTF-8; a UTF-8 byte-order mark is accepted.
 
-To use this workspace's existing virtual environment in Windows PowerShell:
+Successful execution prints only the program's output and exits with status 0. File, lexical, syntax, and runtime errors go to standard error and exit with status 1. Invalid command-line arguments exit with status 2. `python main.py --help` describes the options.
 
-```powershell
-& .\.venv\Scripts\python.exe main.py examples/sample.rule
-& .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+To include the source line and a caret in language-error diagnostics, add `--show-source`:
+
+```console
+python main.py examples/sample.rule --show-source
 ```
 
-Successful execution prints only the program's output and exits with status 0. File, lexical, syntax, and runtime errors go to standard error and exit with status 1. Invalid command-line arguments exit with status 2. `python main.py --help` describes the options.
+The option applies to lexical, syntax, and runtime errors on stderr. Error messages, file paths, one-based locations, and exit codes remain the same. Tabs expand to four-column stops for caret alignment, and blank lines at end of file are supported.
 
 ## Architecture
 
@@ -105,13 +106,28 @@ The implementation has no fixed number of supported nesting levels. Like other r
 
 `Evaluator.execute(statements)` executes the top-level list in order. `evaluate(expression)` recursively evaluates expression children and returns a value. Statement dispatch performs declarations, assignments, printing, and control flow. Variables always resolve through `Environment.get()`; assignment always uses `Environment.assign()`.
 
+The evaluator builds two reusable dispatch dictionaries during initialization. They map exact AST classes (`type(node)`) to statement and expression handlers. Handlers recursively visit child nodes; dispatch tables organize the same tree-walk interpreter without a visitor framework or bytecode. Unregistered AST classes, including subclasses of supported nodes, produce unsupported-node errors. This design improves maintainability; no speed improvement is claimed.
+
 A block saves the enclosing environment, installs a child, executes its statements, and restores the enclosing environment in `finally`, including on runtime errors. An evaluator retains its global environment across multiple `execute()` calls. An output callback can be supplied for tests or embedding; by default it is Python's `print`.
 
 **The two kinds of recursion are different:** AST recursion follows syntax-tree children to evaluate nested expressions and statements. Environment recursion follows enclosing-scope parent pointers to locate a name. For `print(x + 1)` in a nested block, AST traversal reaches `Variable("x")`; that lookup separately walks the environment chain. A while loop uses repeated execution, not one Python recursive call per iteration.
 
 ### Conditional branches
 
-An `if` evaluates its condition once and requires a boolean. If true, it executes the `then` block; otherwise it executes the optional `else` block. Unselected branches are not evaluated, although they must still contain valid syntax. Nested conditionals use the same evaluator and block-scoping rules.
+An `if` evaluates its condition once and requires a boolean. If true, it executes the `then` block; otherwise it checks the next `else if` or executes the final `else` block. The first matching branch runs. Unselected conditions and branches are not evaluated, although they must still contain valid syntax. Nested conditionals use the same evaluator and block-scoping rules.
+
+```text
+let score = 85;
+if (score >= 90) {
+    print("Excellent!");
+} else if (score >= 75) {
+    print("Passed!");
+} else {
+    print("Try again.");
+}
+```
+
+An `else if` is another `IfStatement` stored as the preceding node's `else_branch`. Chaining introduces no extra scope around its condition; every executed branch block still creates its own child environment.
 
 ### Loops and safety limit
 
@@ -149,11 +165,12 @@ print(expression);
 { statements }
 if (condition) { statements }
 if (condition) { statements } else { statements }
+if (condition) { statements } else if (condition) { statements } else { statements }
 while (condition) { statements }
 rule name when (condition) { statements }
 ```
 
-Declarations, assignments, and print statements require semicolons. Blocks and control statements do not take a trailing semicolon. Control bodies require braces, even for one statement. To express an else-if, nest an `if` inside the `else` block. Standalone expression statements and assignment expressions are not supported. `print` takes exactly one expression.
+Declarations, assignments, and print statements require semicolons. Blocks and control statements do not take a trailing semicolon. Ordinary branches and control bodies require braces, even for one statement. Native `else if` chains may have any number of branches and an optional final `else` block. An arbitrary statement immediately after `else` is rejected. Explicitly nesting an `if` inside an `else` block also remains supported. Standalone expression statements and assignment expressions are not supported. `print` takes exactly one expression.
 
 ### Operators (highest to lowest precedence)
 
@@ -166,9 +183,11 @@ Declarations, assignments, and print statements require semicolons. Blocks and c
 | 5 | `>`, `>=`, `<`, `<=` | Numeric comparisons |
 | 6 | `==`, `!=` | Value equality and inequality |
 | 7 | `&&` | Short-circuit boolean AND |
-| 8 | `||` | Short-circuit boolean OR |
+| 8 | `\|\|` | Short-circuit boolean OR |
 
 Arithmetic and ordering require numeric operands. Booleans do **not** count as numbers, even though Python's `bool` inherits from `int`. Division produces a floating-point result (`4 / 2` prints `2.0`); division by zero raises an error. Decimal arithmetic uses Python floats and their ordinary rounding behavior. Non-finite results and floating-point overflow raise language errors.
+
+Numeric operators validate the left operand before evaluating the right. For example, `true + missing` reports a numeric type error before resolving `missing`. Equality remains unrestricted by numeric type checks. Arithmetic results are checked for finiteness where they are produced, and expression evaluation also rejects non-finite values supplied through an external environment or manually constructed literal.
 
 Equality accepts any pair of supported values. Integers and floats compare numerically (`1 == 1.0` is true); different nonnumeric types compare unequal (`true == 1` and `"1" == 1` are false). `!=` negates equality. Comparisons do not have Python-style chaining: use `x > 0 && x < 10`.
 
@@ -187,11 +206,12 @@ program     -> statement* EOF
 statement   -> "let" IDENTIFIER "=" expression ";"
              | IDENTIFIER "=" expression ";"
              | "print" "(" expression ")" ";"
-             | "if" "(" expression ")" block ("else" block)?
+             | conditional
              | "while" "(" expression ")" block
              | "rule" IDENTIFIER "when" "(" expression ")" block
              | block
 block       -> "{" statement* "}"
+conditional -> "if" "(" expression ")" block ("else" (conditional | block))?
 expression  -> logical_or
 logical_or  -> logical_and ("||" logical_and)*
 logical_and -> equality ("&&" equality)*
@@ -260,7 +280,7 @@ python -m unittest discover -s tests -v
 
 The standard-library suite covers recursive lookup and assignment, shadowing, tokenization, AST structure and precedence, malformed syntax, all control statements, strict operand types, short-circuiting, fresh loop scopes, immediate rules, source locations, and safety-limit boundaries. Integration tests run actual CLI subprocesses, compare every example's exact output, verify the default sample from another working directory, and check expected failures without tracebacks.
 
-The completed suite passed **89 tests**, with no skipped tests. See [RUNTIME.md](RUNTIME.md) for the actual Python version, operating system, commands, and observed results. Python 3.10 is the minimum target; execution was verified on the version recorded there.
+The current suite passes **124 tests**, with no skipped tests. The latest refactoring baseline was 93 passing tests; the original historical record reports 89. See [RUNTIME.md](RUNTIME.md) for the actual Python version, operating system, commands, and observed results. Python 3.10 is the minimum target; execution was verified on the version recorded there.
 
 ## Project directory structure
 
@@ -283,19 +303,17 @@ rule-engine-dsl/
 |   |-- test_lexer.py
 |   |-- test_parser.py
 |   |-- test_evaluator.py
+|   |-- test_diagnostics.py
 |   `-- test_integration.py
 |-- README.md
 |-- RUNTIME.md
 `-- .gitignore
 ```
 
-The existing local `.idea/` and `.venv/` directories are preserved and ignored by Git, as are Python bytecode caches.
-
 ## Errors, limitations, and future improvements
 
-Expected DSL errors include the file path and, for source errors, a one-based line/column. Evaluation stops at the first failure. Previously printed output and completed mutations are not rolled back. A missing semicolon is a syntax error; an undefined variable or nonboolean condition is a runtime error.
+Expected DSL errors include the file path and, for source errors, a one-based line/column. `--show-source` optionally adds the source line and a caret. Evaluation stops at the first failure. Previously printed output and completed mutations are not rolled back. A missing semicolon is a syntax error; an undefined variable or nonboolean condition is a runtime error.
 
 This teaching implementation has no functions, collections, classes, input statement, `break`/`continue`, imports, or persistent rule agenda. It reports one syntax error at a time. Extremely deep syntax trees or scope chains are constrained by Python's recursion limit; the CLI reports excessive nesting gracefully. Integers and their conversion to/from text remain subject to the host runtime's resource limits. The loop limit is per encounter and does not provide a global time or memory sandbox.
 
-Possible extensions include parser error recovery, functions with lexical closures, a static type-checking pass, richer diagnostics with highlighted source lines, and a total execution-step budget. An inference engine would require a separately designed rule lifecycle rather than changing the documented immediate rule semantics implicitly.
-
+The two graded laboratory requirements are recursive parent-pointer environments and tree-walk conditionals/loops. Else-if syntax, optional caret diagnostics, and the loop safety limit are supporting conveniences. Built-in functions, `break`/`continue`, function declarations and closures, static analysis, and inference-engine features remain optional future proposals outside those requirements; none are implemented here. Parser error recovery and a total execution-step budget could also be considered separately. A reactive inference engine would require a separately designed rule lifecycle rather than changing the documented immediate rule semantics implicitly.

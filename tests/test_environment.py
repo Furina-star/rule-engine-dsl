@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from environment import Environment
 from errors import EvaluationError
@@ -83,6 +84,18 @@ class EnvironmentTests(unittest.TestCase):
             child.assign("missing", 3)
         self.assertEqual({}, root.values)
         self.assertEqual({}, child.values)
+
+    def test_lookup_and_assignment_call_parent_methods_recursively(self):
+        parent = Environment()
+        parent.define("x", 5)
+        child = Environment(Environment(parent))
+        with patch.object(parent, "get", wraps=parent.get) as parent_get:
+            self.assertEqual(5, child.get("x"))
+            parent_get.assert_called_once_with("x")
+        with patch.object(parent, "assign", wraps=parent.assign) as parent_assign:
+            child.assign("x", 9)
+            parent_assign.assert_called_once_with("x", 9)
+        self.assertEqual(9, parent.get("x"))
 
 
 if __name__ == "__main__":
