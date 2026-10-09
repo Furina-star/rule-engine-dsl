@@ -1,4 +1,4 @@
-"""A tree-walk interpreter: recursively evaluate AST nodes in lexical scopes."""
+"""Execute AST statements and expressions in lexical scopes with runtime checks."""
 
 from collections.abc import Callable, Iterable
 from math import isfinite
@@ -22,8 +22,6 @@ _NUMERIC_OPERATORS = {
 
 
 class Evaluator:
-    """Recursively walk AST nodes in lexical scopes, checking rules immediately."""
-
     def __init__(self, environment: Environment | None = None,
                  output: Callable[[str], None] = print,
                  max_loop_iterations: int = DEFAULT_LOOP_LIMIT) -> None:
@@ -53,12 +51,12 @@ class Evaluator:
         }
 
     def execute(self, statements: Iterable[nodes.Stmt]) -> None:
-        """Execute in order, retaining globals even across calls to execute()."""
+        # Globals persist across calls; statements run in source order.
         for statement in statements:
             self.execute_statement(statement)
 
     def execute_statement(self, statement: nodes.Stmt) -> None:
-        """Execute one statement, attaching its location to unlocated errors."""
+        # Attach the statement location only when an error has none.
         try:
             self._execute_statement(statement)
         except EvaluationError as error:
@@ -79,6 +77,7 @@ class Evaluator:
         self.environment.assign(statement.name, self.evaluate(statement.value))
 
     def _execute_rule(self, statement: nodes.RuleStatement) -> None:
+        # Check rules immediately when encountered.
         if self._condition(statement.condition, f"rule '{statement.name}' condition"):
             self.execute_statement(statement.action)
 
@@ -134,7 +133,7 @@ class Evaluator:
         return cast(int | float, value)
 
     def evaluate(self, expression: nodes.Expr) -> Value:
-        """Evaluate an expression safely and report failures at their AST location."""
+        # Attach the expression location to runtime and overflow errors.
         try:
             # Also check literals and variables supplied by embedded callers.
             return self._finite(self._evaluate(expression))

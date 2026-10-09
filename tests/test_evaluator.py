@@ -1,4 +1,4 @@
-"""Evaluator regressions use actual-first equality and identity assertions."""
+"""Test evaluation, lexical scopes, control flow, and runtime diagnostics."""
 
 import unittest
 from typing import cast
@@ -322,11 +322,12 @@ class EvaluatorTests(unittest.TestCase):
         self.assertEqual((caught.exception.line, caught.exception.column), (6, 9))
 
     def test_dispatch_rejects_unregistered_subclasses(self):
+        # Subclasses need their own registered handlers.
         class DerivedNumber(ast.NumberLiteral):
-            """An embedding-specific node without a registered handler."""
+            pass
 
         class DerivedPrint(ast.PrintStatement):
-            """An embedding-specific statement without a registered handler."""
+            pass
 
         expression = DerivedNumber(1, line=2, column=3)
         statement = DerivedPrint(ast.NumberLiteral(1), line=5, column=8)

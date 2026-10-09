@@ -1,3 +1,5 @@
+"""Test recursive scope lookup, assignment, shadowing, and binding isolation."""
+
 import unittest
 from unittest.mock import patch
 

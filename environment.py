@@ -9,19 +9,18 @@ from errors import EvaluationError
 Value: TypeAlias = int | float | str | bool
 
 
+# Each scope stores local bindings and an optional parent.
 class Environment:
-    """A local binding dictionary and an optional enclosing environment."""
-
     def __init__(self, parent: Environment | None = None) -> None:
         self.parent = parent
         self.values: dict[str, Value] = {}
 
     def define(self, name: str, value: Value) -> None:
-        """Create or replace a binding in this scope only."""
+        # Define bindings only in this scope.
         self.values[name] = value
 
     def get(self, name: str) -> Value:
-        """Recursively read the nearest binding, starting in this scope."""
+        # Read the nearest binding through the parent chain.
         if name in self.values:
             return self.values[name]
         if self.parent is not None:
@@ -29,7 +28,7 @@ class Environment:
         raise EvaluationError(f"Undefined variable '{name}'.")
 
     def assign(self, name: str, value: Value) -> None:
-        """Recursively update the nearest existing binding; never create one."""
+        # Update the nearest existing binding without creating one.
         if name in self.values:
             self.values[name] = value
             return
@@ -37,4 +36,3 @@ class Environment:
             self.parent.assign(name, value)
             return
         raise EvaluationError(f"Cannot assign undefined variable '{name}'.")
-

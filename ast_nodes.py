@@ -11,8 +11,9 @@ class Node:
     column: int = 1
 
 
+# Expressions produce values.
 class Expr(Node):
-    """Base type for expressions, which produce values."""
+    pass
 
 
 @dataclass
@@ -53,8 +54,9 @@ class Grouping(Expr):
     expression: Expr
 
 
+# Statements change state or control execution.
 class Stmt(Node):
-    """Base type for statements, which change state or control execution."""
+    pass
 
 
 @dataclass

@@ -108,7 +108,7 @@ class Parser:
         return self._or()
 
     def _binary(self, operand: Callable[[], nodes.Expr], *operators: TokenType) -> nodes.Expr:
-        """Build a left-associative chain at one precedence level."""
+        # Build a left-associative chain at this precedence level.
         expression = operand()
         while self._match(*operators):
             operator = self.tokens[self.current - 1]

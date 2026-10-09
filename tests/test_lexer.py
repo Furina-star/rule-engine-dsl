@@ -1,3 +1,5 @@
+"""Test tokenization, source positions, string escapes, and lexical errors."""
+
 import unittest
 
 from errors import LexerError

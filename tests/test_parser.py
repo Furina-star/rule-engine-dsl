@@ -1,3 +1,5 @@
+"""Test AST construction, operator precedence, control flow, and syntax errors."""
+
 import unittest
 from typing import TypeVar
 
@@ -15,7 +17,7 @@ def parse(source: str) -> list[ast.Stmt]:
 
 class ParserTests(unittest.TestCase):
     def assert_node(self, node: ast.Node | None, kind: type[NodeType]) -> NodeType:
-        """Assert the node type before inspecting its type-specific fields."""
+        # Verify the node type before inspecting its fields.
         self.assertIsInstance(node, kind)
         return node
 

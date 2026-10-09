@@ -1,9 +1,8 @@
 """User-facing errors shared by the interpreter pipeline."""
 
 
+# Expected language errors may include a source location.
 class DSLError(Exception):
-    """An expected language error, optionally attached to a source location."""
-
     label = "DSL error"
 
     def __init__(self, message: str, line: int | None = None,
@@ -28,4 +27,3 @@ class ParseError(DSLError):
 
 class EvaluationError(DSLError):
     label = "Runtime error"
-
