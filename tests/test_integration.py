@@ -20,21 +20,23 @@ EXPECTED = {
 
 
 class IntegrationTests(unittest.TestCase):
-    def cli(self, *arguments, cwd=ROOT):
+    @staticmethod
+    def cli(*arguments: str | Path, cwd: str | Path = ROOT) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, str(ROOT / "main.py"), *map(str, arguments)],
                               cwd=cwd, capture_output=True, text=True, timeout=10)
 
-    def assert_success(self, result, expected):
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr, "")
-        self.assertEqual(result.stdout, expected)
+    def assert_success(self, result: subprocess.CompletedProcess[str], expected: str) -> None:
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("", result.stderr)
+        self.assertEqual(expected, result.stdout)
 
-    def assert_failure(self, result, message, status=1):
-        self.assertEqual(result.returncode, status, result.stderr)
+    def assert_failure(self, result: subprocess.CompletedProcess[str], message: str,
+                       status: int = 1) -> None:
+        self.assertEqual(status, result.returncode, result.stderr)
         self.assertIn(message, result.stderr)
         self.assertNotIn("Traceback", result.stderr)
 
-    def temporary_program(self, source, *arguments):
+    def temporary_program(self, source: str, *arguments: str | Path) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "test.rule"
             path.write_text(source, encoding="utf-8")
@@ -45,8 +47,8 @@ class IntegrationTests(unittest.TestCase):
         evaluator = Evaluator(output=output.append)
         source = (ROOT / "examples" / "sample.rule").read_text(encoding="utf-8")
         evaluator.execute(Parser(Lexer(source).tokenize()).parse())
-        self.assertEqual("\n".join(output) + "\n", EXPECTED["sample.rule"])
-        self.assertEqual(evaluator.globals.values, {"score": 85, "counter": 3})
+        self.assertEqual(EXPECTED["sample.rule"], "\n".join(output) + "\n")
+        self.assertEqual({"score": 85, "counter": 3}, evaluator.globals.values)
 
     def test_all_example_files_via_cli(self):
         for filename, expected in EXPECTED.items():
@@ -64,7 +66,7 @@ class IntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = self.cli(Path(directory) / "does-not-exist.rule")
         self.assert_failure(result, "File error")
-        self.assertEqual(result.stdout, "")
+        self.assertEqual("", result.stdout)
 
     def test_directory_is_not_source_file(self):
         self.assert_failure(self.cli(ROOT / "examples"), "File error")
@@ -84,17 +86,17 @@ class IntegrationTests(unittest.TestCase):
     def test_lexer_error(self):
         result = self.temporary_program("\n  @")
         self.assert_failure(result, "Lexer error at line 2, column 3")
-        self.assertEqual(result.stdout, "")
+        self.assertEqual("", result.stdout)
 
     def test_parse_error_before_any_execution(self):
         result = self.temporary_program('print("should not run"); let x = ;')
         self.assert_failure(result, "Syntax error")
-        self.assertEqual(result.stdout, "")
+        self.assertEqual("", result.stdout)
 
     def test_runtime_error_keeps_prior_output(self):
         result = self.temporary_program('print("before");\nprint(1 / 0);')
         self.assert_failure(result, "Runtime error at line 2, column 9: Division by zero")
-        self.assertEqual(result.stdout, "before\n")
+        self.assertEqual("before\n", result.stdout)
 
     def test_undefined_and_invalid_condition_errors(self):
         for source, message in (("x = 1;", "undefined variable"),
@@ -121,11 +123,10 @@ class IntegrationTests(unittest.TestCase):
 
     def test_help(self):
         result = self.cli("--help")
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(0, result.returncode)
         self.assertIn("--max-loop-iterations", result.stdout)
-        self.assertEqual(result.stderr, "")
+        self.assertEqual("", result.stderr)
 
 
 if __name__ == "__main__":
     unittest.main()
-

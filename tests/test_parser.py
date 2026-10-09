@@ -1,104 +1,122 @@
 import unittest
+from typing import TypeVar
 
 import ast_nodes as ast
 from errors import ParseError
 from lexer import Lexer
 from parser import Parser
 
+NodeType = TypeVar("NodeType", bound=ast.Node)
 
-def parse(source):
+
+def parse(source: str) -> list[ast.Stmt]:
     return Parser(Lexer(source).tokenize()).parse()
 
 
 class ParserTests(unittest.TestCase):
+    def assert_node(self, node: ast.Node | None, kind: type[NodeType]) -> NodeType:
+        """Assert the node type before inspecting its type-specific fields."""
+        self.assertIsInstance(node, kind)
+        return node
+
+    def print_expression(self, source: str) -> ast.Expr:
+        statement = self.assert_node(parse(source)[0], ast.PrintStatement)
+        return statement.expression
+
     def test_variable_declaration_and_assignment(self):
         declaration, assignment = parse("let x = 5; x = 6;")
-        self.assertIsInstance(declaration, ast.LetStatement)
-        self.assertEqual(declaration.name, "x")
-        self.assertEqual(declaration.initializer.value, 5)
-        self.assertIsInstance(assignment, ast.Assignment)
-        self.assertEqual(assignment.value.value, 6)
+        declaration = self.assert_node(declaration, ast.LetStatement)
+        self.assertEqual("x", declaration.name)
+        initializer = self.assert_node(declaration.initializer, ast.NumberLiteral)
+        self.assertEqual(5, initializer.value)
+        assignment = self.assert_node(assignment, ast.Assignment)
+        value = self.assert_node(assignment.value, ast.NumberLiteral)
+        self.assertEqual(6, value.value)
 
     def test_literal_types_and_variable(self):
         statements = parse('print(1.5); print("hello"); print(true); print(false); print(x);')
         expected = (ast.NumberLiteral, ast.StringLiteral, ast.BooleanLiteral,
                     ast.BooleanLiteral, ast.Variable)
         for statement, kind in zip(statements, expected):
-            self.assertIsInstance(statement, ast.PrintStatement)
+            statement = self.assert_node(statement, ast.PrintStatement)
             self.assertIsInstance(statement.expression, kind)
 
     def test_all_precedence_levels(self):
-        expression = parse("print(true || false && 1 == 2 < 3 + 4 * -5);")[0].expression
-        self.assertEqual(expression.operator, "||")
-        expression = expression.right
-        self.assertEqual(expression.operator, "&&")
-        expression = expression.right
-        self.assertEqual(expression.operator, "==")
-        expression = expression.right
-        self.assertEqual(expression.operator, "<")
-        expression = expression.right
-        self.assertEqual(expression.operator, "+")
-        expression = expression.right
-        self.assertEqual(expression.operator, "*")
-        self.assertIsInstance(expression.right, ast.Unary)
-        self.assertEqual(expression.right.operator, "-")
+        expression = self.print_expression("print(true || false && 1 == 2 < 3 + 4 * -5);")
+        for operator in ("||", "&&", "==", "<", "+", "*"):
+            with self.subTest(operator=operator):
+                binary = self.assert_node(expression, ast.Binary)
+                self.assertEqual(operator, binary.operator)
+                expression = binary.right
+        unary = self.assert_node(expression, ast.Unary)
+        self.assertEqual("-", unary.operator)
 
     def test_grouping_and_unary(self):
-        expression = parse("print(-(1 + 2) * 3);")[0].expression
-        self.assertEqual(expression.operator, "*")
-        self.assertIsInstance(expression.left.operand, ast.Grouping)
-        self.assertEqual(expression.left.operand.expression.operator, "+")
-        unary = parse("print(!!false);")[0].expression
-        self.assertEqual(unary.operator, "!")
-        self.assertEqual(unary.operand.operator, "!")
+        expression = self.assert_node(self.print_expression("print(-(1 + 2) * 3);"), ast.Binary)
+        self.assertEqual("*", expression.operator)
+        left = self.assert_node(expression.left, ast.Unary)
+        grouping = self.assert_node(left.operand, ast.Grouping)
+        grouped = self.assert_node(grouping.expression, ast.Binary)
+        self.assertEqual("+", grouped.operator)
+        unary = self.assert_node(self.print_expression("print(!!false);"), ast.Unary)
+        self.assertEqual("!", unary.operator)
+        operand = self.assert_node(unary.operand, ast.Unary)
+        self.assertEqual("!", operand.operator)
 
     def test_left_associativity(self):
         for source, operator in (("10 - 3 - 2", "-"), ("8 / 4 / 2", "/")):
             with self.subTest(source=source):
-                expression = parse(f"print({source});")[0].expression
-                self.assertEqual(expression.operator, operator)
-                self.assertEqual(expression.left.operator, operator)
+                expression = self.assert_node(self.print_expression(f"print({source});"), ast.Binary)
+                self.assertEqual(operator, expression.operator)
+                left = self.assert_node(expression.left, ast.Binary)
+                self.assertEqual(operator, left.operator)
                 self.assertIsInstance(expression.right, ast.NumberLiteral)
 
     def test_if_else(self):
         statement = parse("if (true) { print(1); } else { print(2); }")[0]
-        self.assertIsInstance(statement, ast.IfStatement)
+        statement = self.assert_node(statement, ast.IfStatement)
         self.assertIsInstance(statement.then_branch, ast.Block)
-        self.assertIsInstance(statement.else_branch, ast.Block)
-        self.assertEqual(statement.else_branch.statements[0].expression.value, 2)
+        else_branch = self.assert_node(statement.else_branch, ast.Block)
+        printed = self.assert_node(else_branch.statements[0], ast.PrintStatement)
+        value = self.assert_node(printed.expression, ast.NumberLiteral)
+        self.assertEqual(2, value.value)
 
     def test_if_without_else(self):
-        statement = parse("if (false) {}")[0]
+        statement = self.assert_node(parse("if (false) {}")[0], ast.IfStatement)
         self.assertIsNone(statement.else_branch)
-        self.assertEqual(statement.then_branch.statements, [])
+        self.assertEqual([], statement.then_branch.statements)
 
     def test_while(self):
         statement = parse("while (x < 3) { x = x + 1; }")[0]
-        self.assertIsInstance(statement, ast.WhileStatement)
-        self.assertEqual(statement.condition.operator, "<")
+        statement = self.assert_node(statement, ast.WhileStatement)
+        condition = self.assert_node(statement.condition, ast.Binary)
+        self.assertEqual("<", condition.operator)
         self.assertIsInstance(statement.body.statements[0], ast.Assignment)
 
     def test_rule(self):
         statement = parse('rule passing when (score >= 75) { print("pass"); }')[0]
-        self.assertIsInstance(statement, ast.RuleStatement)
-        self.assertEqual(statement.name, "passing")
-        self.assertEqual(statement.condition.operator, ">=")
+        statement = self.assert_node(statement, ast.RuleStatement)
+        self.assertEqual("passing", statement.name)
+        condition = self.assert_node(statement.condition, ast.Binary)
+        self.assertEqual(">=", condition.operator)
         self.assertIsInstance(statement.action, ast.Block)
 
     def test_nested_blocks_and_conditions(self):
         statement = parse("{ { if (true) { if (false) {} else {} } } }")[0]
-        inner = statement.statements[0].statements[0]
-        self.assertIsInstance(inner, ast.IfStatement)
+        statement = self.assert_node(statement, ast.Block)
+        block = self.assert_node(statement.statements[0], ast.Block)
+        inner = self.assert_node(block.statements[0], ast.IfStatement)
         self.assertIsInstance(inner.then_branch.statements[0], ast.IfStatement)
 
     def test_source_locations(self):
-        statement = parse("\n  print(missing + 1);")[0]
-        self.assertEqual((statement.line, statement.column), (2, 3))
-        self.assertEqual((statement.expression.line, statement.expression.column), (2, 17))
-        self.assertEqual(statement.expression.left.column, 9)
+        statement = self.assert_node(parse("\n  print(missing + 1);")[0], ast.PrintStatement)
+        self.assertEqual((2, 3), (statement.line, statement.column))
+        expression = self.assert_node(statement.expression, ast.Binary)
+        self.assertEqual((2, 17), (expression.line, expression.column))
+        self.assertEqual(9, expression.left.column)
 
     def test_empty_program(self):
-        self.assertEqual(parse("// nothing"), [])
+        self.assertEqual([], parse("// nothing"))
 
     def test_malformed_statements(self):
         invalid = (
@@ -125,4 +143,3 @@ class ParserTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
