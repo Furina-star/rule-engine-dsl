@@ -1,0 +1,25 @@
+# Python bytecode and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local IDE and OS metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local configuration, credentials, and diagnostic logs
+.env
+.env.*
+!.env.example
+.aws/
+.codex/
+*.pem
+*.key
+*.log
+
+# Optional coverage tooling
+.coverage
+htmlcov/

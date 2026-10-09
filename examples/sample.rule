@@ -1,0 +1,19 @@
+let score = 85;
+
+rule passing_score when (score >= 75) {
+    print("Student passed!");
+}
+
+if (score >= 90) {
+    print("Excellent!");
+} else {
+    print("Good job!");
+}
+
+let counter = 0;
+
+while (counter < 3) {
+    print(counter);
+    counter = counter + 1;
+}
+

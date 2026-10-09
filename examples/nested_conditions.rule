@@ -1,0 +1,22 @@
+let score = 85;
+let attendance = 92;
+let suspended = false;
+
+if (score >= 75 && attendance >= 80) {
+    if (score >= 90 || attendance >= 95) {
+        print("Honors candidate");
+    } else {
+        print("Passed with regular standing");
+    }
+} else {
+    print("Requirements not met");
+}
+
+rule eligible when (!suspended && score >= 75) {
+    if (attendance < 80) {
+        print("Attendance review needed");
+    } else {
+        print("Eligible for next term");
+    }
+}
+

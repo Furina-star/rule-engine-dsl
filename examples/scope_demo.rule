@@ -1,0 +1,18 @@
+let name = "global";
+let total = 10;
+{
+    // This environment's parent is the global environment.
+    let name = "outer block";
+    {
+        // Lookup follows two parent pointers to find total.
+        print(name);
+        print(total);
+        total = total + 5;
+        let name = "inner block";
+        print(name);
+    }
+    print(name);
+}
+print(name);
+print(total);
+

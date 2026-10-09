@@ -1,0 +1,20 @@
+let row = 1;
+let total = 0;
+
+while (row <= 3) {
+    // A new column binding is created in each fresh loop-body scope.
+    let column = 1;
+    while (column <= 2) {
+        let product = row * column;
+        if (product >= 3) {
+            print(product);
+        }
+        total = total + product;
+        column = column + 1;
+    }
+    row = row + 1;
+}
+
+print("Total:");
+print(total);
+
