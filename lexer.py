@@ -105,46 +105,69 @@ class Lexer:
         while self.current < len(self.source):
             start, line, column = self.current, self.line, self.column
             char = self._advance()
-            literal = None
             if char in " \t\n":
                 continue
             if char == "/" and self._peek() == "/":
-                while self._peek() not in ("", "\n"):
-                    self._advance()
+                self._skip_comment()
                 continue
-            if self._digit(char):
-                while self._digit(self._peek()):
-                    self._advance()
-                if self._peek() == ".":
-                    self._advance()
-                    if not self._digit(self._peek()):
-                        raise LexerError("Expected a digit after decimal point.", line, column)
-                    while self._digit(self._peek()):
-                        self._advance()
-                number = self.source[start:self.current]
-                try:
-                    literal = float(number) if "." in number else int(number)
-                except ValueError as error:
-                    raise LexerError("Numeric literal is too large.", line, column) from error
-                if isinstance(literal, float) and not isfinite(literal):
-                    raise LexerError("Numeric literal must be finite.", line, column)
-                kind = TokenType.NUMBER
-            elif self._identifier_start(char):
-                while self._identifier_start(self._peek()) or self._digit(self._peek()):
-                    self._advance()
-                kind = KEYWORDS.get(self.source[start:self.current], TokenType.IDENTIFIER)
-            elif char == '"':
-                literal = self._string(line, column)
-                kind = TokenType.STRING
-            elif char + self._peek() in DOUBLE_TOKENS:
-                kind = DOUBLE_TOKENS[char + self._advance()]
-            elif char in SINGLE_TOKENS:
-                kind = SINGLE_TOKENS[char]
-            else:
-                raise LexerError(f"Unsupported character {char!r}.", line, column)
-            tokens.append(Token(kind, self.source[start:self.current], literal, line, column))
+            tokens.append(self._scan_token(char, start, line, column))
         tokens.append(Token(TokenType.EOF, "", None, self.line, self.column))
         return tokens
+
+    def _skip_comment(self) -> None:
+        while self._peek() not in ("", "\n"):
+            self._advance()
+
+    def _scan_token(self, char: str, start: int, line: int, column: int) -> Token:
+        literal = None
+        if self._digit(char):
+            literal = self._number(start, line, column)
+            kind = TokenType.NUMBER
+        elif self._identifier_start(char):
+            kind = self._identifier(start)
+        elif char == '"':
+            literal = self._string(line, column)
+            kind = TokenType.STRING
+        else:
+            kind = self._operator(char, line, column)
+        return Token(kind, self.source[start:self.current], literal, line, column)
+
+    def _number(self, start: int, line: int, column: int) -> int | float:
+        self._consume_digits()
+        if self._peek() == ".":
+            self._advance()
+            if not self._digit(self._peek()):
+                raise LexerError("Expected a digit after decimal point.", line, column)
+            self._consume_digits()
+        number = self.source[start:self.current]
+        try:
+            literal = float(number) if "." in number else int(number)
+        except ValueError as error:
+            raise LexerError("Numeric literal is too large.", line, column) from error
+        if isinstance(literal, float) and not isfinite(literal):
+            raise LexerError("Numeric literal must be finite.", line, column)
+        return literal
+
+    def _consume_digits(self) -> None:
+        while self._digit(self._peek()):
+            self._advance()
+
+    def _identifier(self, start: int) -> TokenType:
+        char = self._peek()
+        while self._identifier_start(char) or self._digit(char):
+            self._advance()
+            char = self._peek()
+        return KEYWORDS.get(self.source[start:self.current], TokenType.IDENTIFIER)
+
+    def _operator(self, char: str, line: int, column: int) -> TokenType:
+        kind = DOUBLE_TOKENS.get(char + self._peek())
+        if kind is not None:
+            self._advance()
+            return kind
+        kind = SINGLE_TOKENS.get(char)
+        if kind is None:
+            raise LexerError(f"Unsupported character {char!r}.", line, column)
+        return kind
 
     def _string(self, line: int, column: int) -> str:
         characters: list[str] = []
@@ -163,4 +186,3 @@ class Lexer:
             raise LexerError("Unterminated string.", line, column)
         self._advance()
         return "".join(characters)
-

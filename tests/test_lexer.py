@@ -36,6 +36,20 @@ class LexerTests(unittest.TestCase):
                           T.LESS_EQUAL, T.AND, T.OR, T.BANG, T.LEFT_PAREN,
                           T.RIGHT_PAREN, T.LEFT_BRACE, T.RIGHT_BRACE, T.SEMICOLON, T.EOF])
 
+    def test_adjacent_tokens_preserve_lexemes_literals_and_positions(self):
+        tokens = Lexer("a1==12.5!=2;").tokenize()
+        self.assertEqual(
+            [(token.type, token.lexeme, token.literal, token.line, token.column)
+             for token in tokens],
+            [(T.IDENTIFIER, "a1", None, 1, 1),
+             (T.EQUAL_EQUAL, "==", None, 1, 3),
+             (T.NUMBER, "12.5", 12.5, 1, 5),
+             (T.BANG_EQUAL, "!=", None, 1, 9),
+             (T.NUMBER, "2", 2, 1, 11),
+             (T.SEMICOLON, ";", None, 1, 12),
+             (T.EOF, "", None, 1, 13)],
+        )
+
     def test_comments_whitespace_and_division(self):
         tokens = Lexer(' \t// comment\n 8 / 2; // end').tokenize()
         self.assertEqual([token.type for token in tokens],
@@ -80,7 +94,15 @@ class LexerTests(unittest.TestCase):
                 with self.assertRaises(LexerError):
                     Lexer(source).tokenize()
 
+    def test_incomplete_decimal_reports_number_start(self):
+        for suffix in ("", " ", "\n", ";"):
+            with self.subTest(suffix=suffix):
+                with self.assertRaisesRegex(
+                    LexerError, "Expected a digit after decimal point"
+                ) as caught:
+                    Lexer("\n  12." + suffix).tokenize()
+                self.assertEqual((caught.exception.line, caught.exception.column), (2, 3))
+
 
 if __name__ == "__main__":
     unittest.main()
-

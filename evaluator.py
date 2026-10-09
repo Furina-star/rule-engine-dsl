@@ -2,12 +2,23 @@
 
 from collections.abc import Callable, Iterable
 from math import isfinite
+import operator as numeric_ops
+from typing import cast
 
 import ast_nodes as ast
 from environment import Environment, Value
 from errors import EvaluationError
 
 DEFAULT_LOOP_LIMIT = 10_000
+_NUMERIC_OPERATORS = {
+    "+": numeric_ops.add,
+    "-": numeric_ops.sub,
+    "*": numeric_ops.mul,
+    ">": numeric_ops.gt,
+    ">=": numeric_ops.ge,
+    "<": numeric_ops.lt,
+    "<=": numeric_ops.le,
+}
 
 
 class Evaluator:
@@ -40,40 +51,52 @@ class Evaluator:
         elif isinstance(statement, ast.Assignment):
             self.environment.assign(statement.name, self.evaluate(statement.value))
         elif isinstance(statement, ast.PrintStatement):
-            value = self.evaluate(statement.expression)
-            try:
-                rendered = str(value).lower() if type(value) is bool else str(value)
-            except ValueError as error:
-                raise EvaluationError("Number is too large to print on this Python runtime.") from error
-            self.output(rendered)
+            self._execute_print(statement)
         elif isinstance(statement, ast.Block):
-            enclosing = self.environment
-            self.environment = Environment(parent=enclosing)
-            try:
-                self.execute(statement.statements)
-            finally:
-                # Restore the parent even when a nested statement fails.
-                self.environment = enclosing
+            self._execute_block(statement)
         elif isinstance(statement, ast.IfStatement):
-            if self._condition(statement.condition, "if condition"):
-                self.execute_statement(statement.then_branch)
-            elif statement.else_branch is not None:
-                self.execute_statement(statement.else_branch)
+            self._execute_if(statement)
         elif isinstance(statement, ast.WhileStatement):
-            iterations = 0
-            # The body restores the enclosing scope before this next check.
-            while self._condition(statement.condition, "while condition"):
-                if iterations >= self.max_loop_iterations:
-                    raise EvaluationError(
-                        f"Loop iteration limit ({self.max_loop_iterations}) exceeded."
-                    )
-                iterations += 1
-                self.execute_statement(statement.body)
+            self._execute_while(statement)
         elif isinstance(statement, ast.RuleStatement):
             if self._condition(statement.condition, f"rule '{statement.name}' condition"):
                 self.execute_statement(statement.action)
         else:
             raise EvaluationError(f"Unsupported statement node: {type(statement).__name__}.")
+
+    def _execute_print(self, statement: ast.PrintStatement) -> None:
+        value = self.evaluate(statement.expression)
+        try:
+            rendered = str(value).lower() if type(value) is bool else str(value)
+        except ValueError as error:
+            raise EvaluationError("Number is too large to print on this Python runtime.") from error
+        self.output(rendered)
+
+    def _execute_block(self, statement: ast.Block) -> None:
+        enclosing = self.environment
+        self.environment = Environment(parent=enclosing)
+        try:
+            self.execute(statement.statements)
+        finally:
+            # Restore the parent even when a nested statement fails.
+            self.environment = enclosing
+
+    def _execute_if(self, statement: ast.IfStatement) -> None:
+        if self._condition(statement.condition, "if condition"):
+            self.execute_statement(statement.then_branch)
+        elif statement.else_branch is not None:
+            self.execute_statement(statement.else_branch)
+
+    def _execute_while(self, statement: ast.WhileStatement) -> None:
+        iterations = 0
+        # The body restores the enclosing scope before this next check.
+        while self._condition(statement.condition, "while condition"):
+            if iterations >= self.max_loop_iterations:
+                raise EvaluationError(
+                    f"Loop iteration limit ({self.max_loop_iterations}) exceeded."
+                )
+            iterations += 1
+            self.execute_statement(statement.body)
 
     def _condition(self, expression: ast.Expr, context: str) -> bool:
         return self._boolean(self.evaluate(expression), context)
@@ -90,7 +113,7 @@ class Evaluator:
         if type(value) not in (int, float):
             raise EvaluationError(f"Operator '{operator}' requires numeric operands; "
                                   f"got {type(value).__name__}.")
-        return value
+        return cast(int | float, value)
 
     def evaluate(self, expression: ast.Expr) -> Value:
         try:
@@ -128,38 +151,37 @@ class Evaluator:
         operator = expression.operator
         left = self.evaluate(expression.left)
         if operator in ("&&", "||"):
-            boolean = self._boolean(left, f"Operator '{operator}'")
-            if operator == "&&" and not boolean:
-                return False
-            if operator == "||" and boolean:
-                return True
-            return self._boolean(self.evaluate(expression.right), f"Operator '{operator}'")
+            return self._logical(expression, left)
 
         right = self.evaluate(expression.right)
         if operator in ("==", "!="):
-            both_numbers = type(left) in (int, float) and type(right) in (int, float)
-            equal = (both_numbers or type(left) is type(right)) and left == right
-            return equal if operator == "==" else not equal
+            return self._equality(left, right, operator)
 
+        return self._numeric_binary(left, right, operator)
+
+    def _logical(self, expression: ast.Binary, left: Value) -> bool:
+        operator = expression.operator
+        boolean = self._boolean(left, f"Operator '{operator}'")
+        if operator == "&&" and not boolean:
+            return False
+        if operator == "||" and boolean:
+            return True
+        return self._boolean(self.evaluate(expression.right), f"Operator '{operator}'")
+
+    @staticmethod
+    def _equality(left: Value, right: Value, operator: str) -> bool:
+        both_numbers = type(left) in (int, float) and type(right) in (int, float)
+        equal = (both_numbers or type(left) is type(right)) and left == right
+        return equal if operator == "==" else not equal
+
+    def _numeric_binary(self, left: Value, right: Value, operator: str) -> Value:
         first = self._number(left, operator)
         second = self._number(right, operator)
-        if operator == "+":
-            return first + second
-        if operator == "-":
-            return first - second
-        if operator == "*":
-            return first * second
         if operator == "/":
             if second == 0:
                 raise EvaluationError("Division by zero.")
             return first / second
-        if operator == ">":
-            return first > second
-        if operator == ">=":
-            return first >= second
-        if operator == "<":
-            return first < second
-        if operator == "<=":
-            return first <= second
-        raise EvaluationError(f"Unknown binary operator '{operator}'.")
-
+        operation = _NUMERIC_OPERATORS.get(operator)
+        if operation is None:
+            raise EvaluationError(f"Unknown binary operator '{operator}'.")
+        return operation(first, second)

@@ -1,5 +1,6 @@
 import unittest
 
+import ast_nodes as ast
 from environment import Environment
 from errors import EvaluationError
 from evaluator import Evaluator
@@ -199,6 +200,20 @@ class EvaluatorTests(unittest.TestCase):
                 with self.assertRaisesRegex(EvaluationError, "requires numeric operands"):
                     self.run_source(f"print({expression});")
 
+    def test_unknown_binary_operator_preserves_location(self):
+        expression = ast.Binary(ast.NumberLiteral(1), "%", ast.NumberLiteral(2),
+                                line=4, column=7)
+        with self.assertRaisesRegex(EvaluationError, "Unknown binary operator '%'") as caught:
+            self.evaluator.evaluate(expression)
+        self.assertEqual((caught.exception.line, caught.exception.column), (4, 7))
+
+    def test_unknown_binary_operator_checks_operands_before_dispatch(self):
+        for left, right in ((ast.BooleanLiteral(True), ast.NumberLiteral(1)),
+                            (ast.NumberLiteral(1), ast.StringLiteral("value"))):
+            with self.subTest(left=left, right=right):
+                with self.assertRaisesRegex(EvaluationError, "requires numeric operands"):
+                    self.evaluator.evaluate(ast.Binary(left, "%", right))
+
     def test_nonfinite_result_and_overflow(self):
         with self.assertRaisesRegex(EvaluationError, "not finite"):
             self.run_source("print(" + "9" * 308 + ".0 * 2);")
@@ -250,4 +265,3 @@ class EvaluatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
