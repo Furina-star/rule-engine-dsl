@@ -213,8 +213,8 @@ class Evaluator:
         if operator == "/":
             if second == 0:
                 raise EvaluationError("Division by zero.")
-            return self._finite(first / second)
+            return first / second
         operation = _NUMERIC_OPERATORS.get(operator)
         if operation is None:
             raise EvaluationError(f"Unknown binary operator '{operator}'.")
-        return self._finite(operation(first, second))
+        return operation(first, second)

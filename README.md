@@ -42,14 +42,6 @@ With no file argument, the interpreter finds the bundled sample relative to `mai
 
 Successful execution prints only the program's output and exits with status 0. File, lexical, syntax, and runtime errors go to standard error and exit with status 1. Invalid command-line arguments exit with status 2. `python main.py --help` describes the options.
 
-To include the source line and a caret in language-error diagnostics, add `--show-source`:
-
-```console
-python main.py examples/sample.rule --show-source
-```
-
-The option applies to lexical, syntax, and runtime errors on stderr. Error messages, file paths, one-based locations, and exit codes remain the same. Tabs expand to four-column stops for caret alignment, and blank lines at end of file are supported.
-
 ## Architecture
 
 ```text
@@ -187,7 +179,7 @@ Declarations, assignments, and print statements require semicolons. Blocks and c
 
 Arithmetic and ordering require numeric operands. Booleans do **not** count as numbers, even though Python's `bool` inherits from `int`. Division produces a floating-point result (`4 / 2` prints `2.0`); division by zero raises an error. Decimal arithmetic uses Python floats and their ordinary rounding behavior. Non-finite results and floating-point overflow raise language errors.
 
-Numeric operators validate the left operand before evaluating the right. For example, `true + missing` reports a numeric type error before resolving `missing`. Equality remains unrestricted by numeric type checks. Arithmetic results are checked for finiteness where they are produced, and expression evaluation also rejects non-finite values supplied through an external environment or manually constructed literal.
+Numeric operators validate the left operand before evaluating the right. For example, `true + missing` reports a numeric type error before resolving `missing`. Equality remains unrestricted by numeric type checks. Expression evaluation rejects non-finite results, including values supplied through an external environment or manually constructed literal.
 
 Equality accepts any pair of supported values. Integers and floats compare numerically (`1 == 1.0` is true); different nonnumeric types compare unequal (`true == 1` and `"1" == 1` are false). `!=` negates equality. Comparisons do not have Python-style chaining: use `x > 0 && x < 10`.
 
@@ -280,7 +272,7 @@ python -m unittest discover -s tests -v
 
 The standard-library suite covers recursive lookup and assignment, shadowing, tokenization, AST structure and precedence, malformed syntax, all control statements, strict operand types, short-circuiting, fresh loop scopes, immediate rules, source locations, and safety-limit boundaries. Integration tests run actual CLI subprocesses, compare every example's exact output, verify the default sample from another working directory, and check expected failures without tracebacks.
 
-The current suite passes **124 tests**, with no skipped tests. The latest refactoring baseline was 93 passing tests; the original historical record reports 89. See [RUNTIME.md](RUNTIME.md) for the actual Python version, operating system, commands, and observed results. Python 3.10 is the minimum target; execution was verified on the version recorded there.
+The current suite passes **114 tests**, with no failures, errors, or skips. See [RUNTIME.md](RUNTIME.md) for the verification environment, commands, results, and historical counts. Python 3.10 is the minimum target; execution was verified on the version recorded there.
 
 ## Project directory structure
 
@@ -303,17 +295,18 @@ rule-engine-dsl/
 |   |-- test_lexer.py
 |   |-- test_parser.py
 |   |-- test_evaluator.py
-|   |-- test_diagnostics.py
 |   `-- test_integration.py
+|-- docs/
+|   `-- rule-engine-dsl.docx
 |-- README.md
 |-- RUNTIME.md
 `-- .gitignore
 ```
 
-## Errors, limitations, and future improvements
+## Errors and limitations
 
-Expected DSL errors include the file path and, for source errors, a one-based line/column. `--show-source` optionally adds the source line and a caret. Evaluation stops at the first failure. Previously printed output and completed mutations are not rolled back. A missing semicolon is a syntax error; an undefined variable or nonboolean condition is a runtime error.
+Expected DSL errors include the file path, error type, descriptive message, and, for source errors, a one-based line/column. Evaluation stops at the first failure. Previously printed output and completed mutations are not rolled back. A missing semicolon is a syntax error; an undefined variable or nonboolean condition is a runtime error.
 
 This teaching implementation has no functions, collections, classes, input statement, `break`/`continue`, imports, or persistent rule agenda. It reports one syntax error at a time. Extremely deep syntax trees or scope chains are constrained by Python's recursion limit; the CLI reports excessive nesting gracefully. Integers and their conversion to/from text remain subject to the host runtime's resource limits. The loop limit is per encounter and does not provide a global time or memory sandbox.
 
-The two graded laboratory requirements are recursive parent-pointer environments and tree-walk conditionals/loops. Else-if syntax, optional caret diagnostics, and the loop safety limit are supporting conveniences. Built-in functions, `break`/`continue`, function declarations and closures, static analysis, and inference-engine features remain optional future proposals outside those requirements; none are implemented here. Parser error recovery and a total execution-step budget could also be considered separately. A reactive inference engine would require a separately designed rule lifecycle rather than changing the documented immediate rule semantics implicitly.
+The two graded laboratory requirements are recursive parent-pointer environments and tree-walk conditionals/loops. Else-if syntax and the loop safety limit are supporting conveniences. Functions, static analysis, and inference-engine features are outside the laboratory scope.
